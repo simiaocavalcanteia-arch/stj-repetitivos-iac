@@ -93,6 +93,9 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;opac
 .tptema{font-family:'Fira Code',monospace;font-size:.68rem;font-weight:600;color:var(--prb);background:var(--prg);border:1px solid rgba(139,92,246,.2);padding:.12rem .5rem;border-radius:5px;white-space:nowrap;flex-shrink:0}
 .tptit{font-size:.82rem;font-weight:600;line-height:1.4}
 .tptese{font-size:.84rem;color:var(--td);line-height:1.7;padding:.6rem 0 .4rem .8rem;border-left:2px solid var(--s3);margin-left:.2rem;text-align:justify}
+.tese-num{font-weight:700;color:var(--bl);margin-right:.15em}
+.tese-letter{font-weight:700;color:var(--pr)}
+.tese-item{display:block;margin-top:.5em;padding-left:.2em}
 .tpmeta{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.3rem}
 .tpmeta span{font-family:'Fira Code',monospace;font-size:.65rem;color:var(--tm)}
 .tplink{font-size:.65rem;padding:.18rem .45rem;border:1px solid var(--bd);border-radius:5px;color:var(--blb);font-weight:500;transition:all .2s;display:inline-block;margin:.08rem}
@@ -288,14 +291,22 @@ return 'sit-def';
 }
 
 function fmtTese(t){
-if(!t||t==='-')return '';
-let s=t;
-s=s.replace(/(?<=[\.\;])\s+(\d{1,2})[\.\)]\s+/g,'<br><br><strong>$1.</strong> ');
-s=s.replace(/^(\d{1,2})[\.\)]\s+/,'<strong>$1.</strong> ');
-s=s.replace(/\s*\(([a-z])\)\s*/g,' (<strong>$1</strong>) ');
-s=s.replace(/\s*([a-z])\)\s+/g,' <strong>$1)</strong> ');
-s=s.replace(/^(<br>)+/,'');
-return s;
+  if(!t||t==='-')return '';
+  let s=t;
+  // Step 1: numbered items at sentence boundaries "1." "2." etc
+  s=s.replace(/([\.\;\:])\s+(\d{1,2})\.\s+(?=[A-ZÁÉÍÓÚÀÂÊÔÃÕÜÇ])/g, '$1</p><p class="tese-item"><span class="tese-num">$2.</span> ');
+  // Start of text numbered item
+  s=s.replace(/^(\d{1,2})\.\s+/, '<span class="tese-num">$1.</span> ');
+  // Also handle "1)" style
+  s=s.replace(/([\.\;\:])\s+(\d{1,2})\)\s+(?=[A-ZÁÉÍÓÚÀÂÊÔÃÕÜÇ])/g, '$1</p><p class="tese-item"><span class="tese-num">$2)</span> ');
+  s=s.replace(/^(\d{1,2})\)\s+/, '<span class="tese-num">$1)</span> ');
+  // Step 2: lettered sub-items (a) (b) (c) — stays on same line
+  s=s.replace(/\s*\(([a-z])\)\s*/g, '<br><span class="tese-letter">($1)</span> ');
+  // Also handle "a)" without parenthesis before
+  s=s.replace(/;\s*([a-z])\)\s+/g, ';<br><span class="tese-letter">$1)</span> ');
+  // Step 3: roman numeral items "I -" "II -" "III -"
+  s=s.replace(/([\.\;\:])\s+((?:X{0,3}(?:IX|IV|V?I{0,3})))\s*[\-–—]\s*/g, '$1</p><p class="tese-item"><span class="tese-num">$2 —</span> ');
+  return s;
 }
 
 function init(){

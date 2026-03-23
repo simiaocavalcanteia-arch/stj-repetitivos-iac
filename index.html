@@ -268,14 +268,31 @@ tbody tr:hover{background:rgba(67,97,238,.04)}
 <script>
 const D=[];
 
-// Map keys by pattern match to avoid Unicode normalization issues
-function gv(d,pat){const k=Object.keys(d).find(k=>k.normalize('NFC').includes(pat));return k?d[k]:'';}
+// Map keys to safe aliases using lowercase indexOf (no Unicode issues)
 D.forEach(d=>{
-d._sit=gv(d,'itua');d._ramo=gv(d,'Ramo');d._questao=gv(d,'uest');
-d._tese=gv(d,'Tese');d._rel=gv(d,'Relator');d._orgao=gv(d,'rgao')||gv(d,'rg\u00e3o');
-d._afet=gv(d,'feta');d._julg=gv(d,'Julgado em');d._ac=gv(d,'publicado');
-d._tj=gv(d,'nsito');d._trib=gv(d,'Tribunal');d._anot=gv(d,'NUGEP');
-d._delim=gv(d,'Delimita');d._rg=gv(d,'Repercuss');d._emb=gv(d,'Embargos');
+  const ks=Object.keys(d);
+  d._sit='';d._ramo='';d._questao='';d._tese='';d._rel='';d._orgao='';
+  d._afet='';d._julg='';d._ac='';d._tj='';d._trib='';d._anot='';
+  d._delim='';d._rg='';d._emb='';
+  for(let i=0;i<ks.length;i++){
+    const kl=ks[i].toLowerCase();
+    const v=d[ks[i]]||'';
+    if(kl.indexOf('situa')>-1)d._sit=v;
+    else if(kl==='ramo do direito')d._ramo=v;
+    else if(kl.indexOf('quest')>-1&&kl.indexOf('submetida')>-1)d._questao=v;
+    else if(kl==='tese firmada')d._tese=v;
+    else if(kl==='relator')d._rel=v;
+    else if(kl.indexOf('julgador')>-1)d._orgao=v;
+    else if(kl.indexOf('afeta')>-1&&kl.indexOf('possível')===-1)d._afet=v;
+    else if(kl==='julgado em')d._julg=v;
+    else if(kl.indexOf('publicado')>-1)d._ac=v;
+    else if(kl.indexOf('nsito')>-1)d._tj=v;
+    else if(kl.indexOf('tribunal')>-1)d._trib=v;
+    else if(kl.indexOf('nugep')>-1)d._anot=v;
+    else if(kl.indexOf('delimita')>-1)d._delim=v;
+    else if(kl.indexOf('repercuss')>-1)d._rg=v;
+    else if(kl.indexOf('embargo')>-1)d._emb=v;
+  }
 });
 
 const RI={};const RS=(()=>{const m={};D.forEach(r=>{const a=r._ramo||'Outros';m[a]=(m[a]||0)+1});return Object.entries(m).sort((a,b)=>b[1]-a[1])})();

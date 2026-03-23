@@ -117,9 +117,14 @@ def main():
     # Sort by tema number
     result = sorted(all_themes.values(), key=lambda x: int(x['tema']))
 
-    # Save
+    # Safety check: do NOT overwrite if extraction failed
     script_dir = os.path.dirname(os.path.abspath(__file__))
     out_path = os.path.join(script_dir, 'dados.json')
+
+    if len(result) < 100:
+        print(f"\nABORTADO: Apenas {len(result)} temas extraídos (mínimo: 100).")
+        print("Os dados existentes NÃO foram alterados.")
+        sys.exit(1)
 
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)

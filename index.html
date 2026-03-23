@@ -271,7 +271,7 @@ const D=[{"tema": "1", "Situação": "Trânsito em Julgado", "Órgão julgador":
 // Normalize Unicode keys (NFC) to prevent mismatch between data and code
 D.forEach(d=>{const ks=Object.keys(d);ks.forEach(k=>{const nk=k.normalize('NFC');if(nk!==k){d[nk]=d[k];delete d[k]}})});
 // Also add short aliases for accented keys to avoid any issues
-D.forEach(d=>{d._sit=d['Situa\u00e7\u00e3o']||'';d._ramo=d._ramo||'';d._questao=d['Quest\u00e3o submetida a julgamento']||'';d._tese=d._tese||'';d._rel=d._rel||'';d._orgao=d['\u00d3rg\u00e3o julgador']||'';d._afet=d['Afeta\u00e7\u00e3o']||'';d._julg=d._julg||'';d._ac=d['Ac\u00f3rd\u00e3o publicado em']||'';d._tj=d['Tr\u00e2nsito em Julgado']||'';d._trib=d._trib||'';d._anot=d['Anota\u00e7\u00f5es NUGEPNAC']||'';d._delim=d['Delimita\u00e7\u00e3o do Julgado']||'';d._rg=d['Repercuss\u00e3o Geral']||''});
+D.forEach(d=>{d._sit=d['Situa\u00e7\u00e3o']||'';d._ramo=d['Ramo do direito']||'';d._questao=d['Quest\u00e3o submetida a julgamento']||'';d._tese=d['Tese Firmada']||'';d._rel=d['Relator']||'';d._orgao=d['\u00d3rg\u00e3o julgador']||'';d._afet=d['Afeta\u00e7\u00e3o']||'';d._julg=d['Julgado em']||'';d._ac=d['Ac\u00f3rd\u00e3o publicado em']||'';d._tj=d['Tr\u00e2nsito em Julgado']||'';d._trib=d['Tribunal de Origem']||'';d._anot=d['Anota\u00e7\u00f5es NUGEPNAC']||'';d._delim=d['Delimita\u00e7\u00e3o do Julgado']||'';d._rg=d['Repercuss\u00e3o Geral']||''});
 
 const RI={};const RS=(()=>{const m={};D.forEach(r=>{const a=r._ramo||'Outros';m[a]=(m[a]||0)+1});return Object.entries(m).sort((a,b)=>b[1]-a[1])})();
 RS.forEach(([a],i)=>{RI[a]=i%12});

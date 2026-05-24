@@ -2,70 +2,19 @@
 """
 Script de atualização automática dos dados de Repetitivos e IACs do STJ.
 Extrai dados de https://processo.stj.jus.br/repetitivos/temas_repetitivos/
-"""
-import urllib.request, urllib.error, http.cookiejar, ssl, re, json, os, sys, time, random, gzip
 
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
+Usa Playwright (Chromium headless) para superar o JS challenge do F5 BIG-IP
+que protege o site (cookies TS*).
+"""
+import re, json, os, sys, time, random
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 BASE = "https://processo.stj.jus.br/repetitivos/temas_repetitivos/"
 
-HEADERS = {
-    'User-Agent': ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                   'AppleWebKit/537.36 (KHTML, like Gecko) '
-                   'Chrome/124.0.0.0 Safari/537.36'),
-    'Accept': ('text/html,application/xhtml+xml,application/xml;q=0.9,'
-               'image/avif,image/webp,*/*;q=0.8'),
-    'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
-    'Accept-Encoding': 'gzip, deflate',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
-    'Sec-Fetch-Site': 'same-origin',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-User': '?1',
-    'Sec-Fetch-Dest': 'document',
-    'Referer': BASE,
-}
+USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/124.0.0.0 Safari/537.36")
 
-# Sessão com cookies (JSESSIONID)
-cookiejar = http.cookiejar.CookieJar()
-opener = urllib.request.build_opener(
-    urllib.request.HTTPCookieProcessor(cookiejar),
-    urllib.request.HTTPSHandler(context=ctx),
-)
-opener.addheaders = list(HEADERS.items())
-
-def _warmup():
-    """Primeira visita para receber cookies de sessão."""
-    try:
-        with opener.open(BASE, timeout=60) as r:
-            r.read()
-        print(f"  warmup OK, cookies: {[c.name for c in cookiejar]}")
-    except Exception as e:
-        print(f"  warmup falhou (segue mesmo assim): {e}")
-
-def fetch(url, max_retries=5):
-    last_err = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            req = urllib.request.Request(url, headers=HEADERS)
-            with opener.open(req, timeout=60) as resp:
-                data = resp.read()
-                if resp.headers.get('Content-Encoding') == 'gzip':
-                    data = gzip.decompress(data)
-                return data.decode('utf-8', errors='replace')
-        except urllib.error.HTTPError as e:
-            last_err = e
-            wait = min(30, 2 ** attempt) + random.uniform(0, 1.5)
-            print(f"  HTTP {e.code} (tentativa {attempt}/{max_retries}), aguardando {wait:.1f}s")
-            time.sleep(wait)
-        except Exception as e:
-            last_err = e
-            wait = 2 * attempt
-            print(f"  Erro {e} (tentativa {attempt}/{max_retries}), aguardando {wait}s")
-            time.sleep(wait)
-    raise last_err
 
 def parse_page(html):
     themes = []
@@ -119,23 +68,61 @@ def parse_page(html):
 
     return themes
 
-def main():
+
+def fetch_all_themes():
+    """Usa Chromium headless para superar o JS challenge do F5 e extrair HTML."""
     all_themes = {}
     page_size = 100
-    page_start = 1
 
-    _warmup()
-
-    while True:
-        url = (
-            f"https://processo.stj.jus.br/repetitivos/temas_repetitivos/"
-            f"pesquisa.jsp?novaConsulta=true&tipo_pesquisa=T"
-            f"&l={page_size}&i={page_start}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=['--disable-blink-features=AutomationControlled'],
         )
+        context = browser.new_context(
+            user_agent=USER_AGENT,
+            locale='pt-BR',
+            timezone_id='America/Sao_Paulo',
+            viewport={'width': 1366, 'height': 900},
+        )
+        page = context.new_page()
 
-        print(f"Fetching page starting at {page_start}...")
-        try:
-            html = fetch(url)
+        # Warmup: passa pelo JS challenge do F5 carregando a home
+        print("Warmup: acessando home para resolver JS challenge do F5...")
+        page.goto(BASE, wait_until='networkidle', timeout=120_000)
+        cookies = context.cookies()
+        ts_cookies = [c['name'] for c in cookies if c['name'].startswith('TS')]
+        print(f"  Cookies F5/TS obtidos: {ts_cookies}")
+        if not ts_cookies:
+            print("  AVISO: nenhum cookie TS* — possível que o challenge não tenha rodado.")
+
+        page_start = 1
+        while True:
+            url = (
+                f"{BASE}pesquisa.jsp?novaConsulta=true&tipo_pesquisa=T"
+                f"&l={page_size}&i={page_start}"
+            )
+            print(f"Fetching page starting at {page_start}...")
+
+            ok = False
+            for attempt in range(1, 4):
+                try:
+                    resp = page.goto(url, wait_until='networkidle', timeout=120_000)
+                    status = resp.status if resp else 'no-response'
+                    if status == 200:
+                        ok = True
+                        break
+                    print(f"  Tentativa {attempt}/3 retornou {status}, aguardando...")
+                    time.sleep(3 + attempt * 2)
+                except PWTimeout as e:
+                    print(f"  Timeout tentativa {attempt}/3: {e}")
+                    time.sleep(3 + attempt * 2)
+
+            if not ok:
+                print("  Falha ao obter página após 3 tentativas, abortando loop.")
+                break
+
+            html = page.content()
             themes = parse_page(html)
 
             if not themes:
@@ -153,10 +140,13 @@ def main():
             page_start += page_size
             time.sleep(0.8 + random.uniform(0, 0.6))
 
-        except Exception as e:
-            print(f"  Error: {e}")
-            break
+        browser.close()
 
+    return all_themes
+
+
+def main():
+    all_themes = fetch_all_themes()
     result = sorted(all_themes.values(), key=lambda x: int(x['tema']))
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -176,6 +166,7 @@ def main():
     generate_html(result, script_dir)
 
     return len(result)
+
 
 def generate_html(data, base_dir):
     """Regenerate index.html with updated data."""
@@ -204,6 +195,7 @@ def generate_html(data, base_dir):
         print(f"index.html updated ({len(new_html):,} bytes)")
     else:
         print("Warning: Could not update data in index.html")
+
 
 if __name__ == '__main__':
     main()

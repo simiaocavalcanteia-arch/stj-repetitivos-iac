@@ -15,6 +15,16 @@ USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
               "AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/124.0.0.0 Safari/537.36")
 
+# Domínios de analytics/tracking que podem bloquear o networkidle.
+# Vamos abortar essas requisições para acelerar e evitar timeouts.
+BLOCKED_HOSTS = (
+    'google-analytics.com', 'googletagmanager.com', 'analytics.google.com',
+    'google.com/ads', 'doubleclick.net', 'googleadservices.com',
+    'hotjar.com', 'static.hotjar.com', 'script.hotjar.com',
+    'analytics.stj.jus.br', 'matomo',
+    'fonts.googleapis.com', 'fonts.gstatic.com',
+)
+
 
 def parse_page(html):
     themes = []
@@ -69,6 +79,40 @@ def parse_page(html):
     return themes
 
 
+def _block_trackers(route, request):
+    """Bloqueia recursos de analytics que atrapalham networkidle / podem dar 503."""
+    url = request.url
+    for host in BLOCKED_HOSTS:
+        if host in url:
+            return route.abort()
+    return route.continue_()
+
+
+def _try_goto(page, url, max_retries=3):
+    """Faz goto com retries, usando 'domcontentloaded' (não 'networkidle')."""
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = page.goto(url, wait_until='domcontentloaded', timeout=60_000)
+            status = resp.status if resp else None
+            if status and status >= 400:
+                print(f"  Tentativa {attempt}/{max_retries}: status {status}")
+                page.wait_for_timeout(3000 + attempt * 2000)
+                continue
+            return resp
+        except PWTimeout as e:
+            last_err = e
+            print(f"  Timeout tentativa {attempt}/{max_retries}")
+            page.wait_for_timeout(3000 + attempt * 2000)
+        except Exception as e:
+            last_err = e
+            print(f"  Erro tentativa {attempt}/{max_retries}: {e}")
+            page.wait_for_timeout(3000 + attempt * 2000)
+    if last_err:
+        raise last_err
+    return None
+
+
 def fetch_all_themes():
     """Usa Chromium headless para superar o JS challenge do F5 e extrair HTML."""
     all_themes = {}
@@ -77,7 +121,7 @@ def fetch_all_themes():
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=['--disable-blink-features=AutomationControlled'],
+            args=['--disable-blink-features=AutomationControlled', '--no-sandbox'],
         )
         context = browser.new_context(
             user_agent=USER_AGENT,
@@ -85,16 +129,22 @@ def fetch_all_themes():
             timezone_id='America/Sao_Paulo',
             viewport={'width': 1366, 'height': 900},
         )
+        # Bloqueia analytics para evitar problemas
+        context.route('**/*', _block_trackers)
+
         page = context.new_page()
 
-        # Warmup: passa pelo JS challenge do F5 carregando a home
-        print("Warmup: acessando home para resolver JS challenge do F5...")
-        page.goto(BASE, wait_until='networkidle', timeout=120_000)
+        # Warmup: passa pelo JS challenge do F5
+        print("Warmup: acessando home para resolver JS challenge do F5...", flush=True)
+        _try_goto(page, BASE)
+        # Dá tempo do F5 challenge JS rodar e setar cookies TS*
+        page.wait_for_timeout(8000)
+
         cookies = context.cookies()
         ts_cookies = [c['name'] for c in cookies if c['name'].startswith('TS')]
-        print(f"  Cookies F5/TS obtidos: {ts_cookies}")
+        print(f"  Cookies F5/TS obtidos: {ts_cookies}", flush=True)
         if not ts_cookies:
-            print("  AVISO: nenhum cookie TS* — possível que o challenge não tenha rodado.")
+            print("  AVISO: nenhum cookie TS* — possível que o challenge não tenha rodado.", flush=True)
 
         page_start = 1
         while True:
@@ -102,37 +152,36 @@ def fetch_all_themes():
                 f"{BASE}pesquisa.jsp?novaConsulta=true&tipo_pesquisa=T"
                 f"&l={page_size}&i={page_start}"
             )
-            print(f"Fetching page starting at {page_start}...")
+            print(f"Fetching page starting at {page_start}...", flush=True)
 
-            ok = False
-            for attempt in range(1, 4):
-                try:
-                    resp = page.goto(url, wait_until='networkidle', timeout=120_000)
-                    status = resp.status if resp else 'no-response'
-                    if status == 200:
-                        ok = True
-                        break
-                    print(f"  Tentativa {attempt}/3 retornou {status}, aguardando...")
-                    time.sleep(3 + attempt * 2)
-                except PWTimeout as e:
-                    print(f"  Timeout tentativa {attempt}/3: {e}")
-                    time.sleep(3 + attempt * 2)
-
-            if not ok:
-                print("  Falha ao obter página após 3 tentativas, abortando loop.")
+            try:
+                resp = _try_goto(page, url)
+                if resp and resp.status >= 400:
+                    print(f"  Status {resp.status} após retries, abortando loop.", flush=True)
+                    break
+            except Exception as e:
+                print(f"  Falha definitiva: {e}", flush=True)
                 break
+
+            # Espera o conteúdo dinâmico aparecer (se houver)
+            try:
+                page.wait_for_selector('text=Tema Repetitivo', timeout=15_000)
+            except PWTimeout:
+                print("  AVISO: seletor 'Tema Repetitivo' não apareceu em 15s.", flush=True)
 
             html = page.content()
             themes = parse_page(html)
 
             if not themes:
-                print(f"  No themes found, stopping.")
+                print(f"  No themes found, stopping.", flush=True)
+                # debug: imprime tamanho do HTML
+                print(f"  HTML size: {len(html)} bytes", flush=True)
                 break
 
             for t in themes:
                 all_themes[t['tema']] = t
 
-            print(f"  Found {len(themes)} themes (total unique: {len(all_themes)})")
+            print(f"  Found {len(themes)} themes (total unique: {len(all_themes)})", flush=True)
 
             if len(themes) < page_size:
                 break
@@ -153,15 +202,15 @@ def main():
     out_path = os.path.join(script_dir, 'dados.json')
 
     if len(result) < 100:
-        print(f"\nABORTADO: Apenas {len(result)} temas extraídos (mínimo: 100).")
-        print("Os dados existentes NÃO foram alterados.")
+        print(f"\nABORTADO: Apenas {len(result)} temas extraídos (mínimo: 100).", flush=True)
+        print("Os dados existentes NÃO foram alterados.", flush=True)
         sys.exit(1)
 
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
-    print(f"\nTotal: {len(result)} temas salvos em {out_path}")
-    print(f"Com tese: {sum(1 for t in result if t.get('Tese Firmada', '') not in ('', '-'))}")
+    print(f"\nTotal: {len(result)} temas salvos em {out_path}", flush=True)
+    print(f"Com tese: {sum(1 for t in result if t.get('Tese Firmada', '') not in ('', '-'))}", flush=True)
 
     generate_html(result, script_dir)
 
@@ -173,7 +222,7 @@ def generate_html(data, base_dir):
     html_path = os.path.join(base_dir, 'index.html')
 
     if not os.path.exists(html_path):
-        print("index.html not found, skipping HTML generation")
+        print("index.html not found, skipping HTML generation", flush=True)
         return
 
     with open(html_path, 'r', encoding='utf-8') as f:
@@ -192,9 +241,9 @@ def generate_html(data, base_dir):
     if new_html != html:
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(new_html)
-        print(f"index.html updated ({len(new_html):,} bytes)")
+        print(f"index.html updated ({len(new_html):,} bytes)", flush=True)
     else:
-        print("Warning: Could not update data in index.html")
+        print("Warning: Could not update data in index.html", flush=True)
 
 
 if __name__ == '__main__':
